@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<meta name="theme-color" content="#1a1a2e"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<title>OD - Conteúdo Urbano</title>
+<link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiT0QgLSBDb250ZcO6ZG8gVXJiYW5vIiwic2hvcnRfbmFtZSI6Ik9EIEFwcCIsInN0YXJ0X3VybCI6Ii4iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMWExYTJlIiwidGhlbWVfY29sb3IiOiIjMWExYTJlIn0="/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>tailwind.config={theme:{extend:{colors:{dark:'#1a1a2e',navy:'#16213e',deep:'#0f3460',accent:'#e94560',accentHover:'#d63851',late:'#ff6b35',lateLight:'#fff3ed'}}}}</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',sans-serif;background:#f0f2f5;color:#1a1a2e;overflow-x:hidden}
+@keyframes pulse-live{0%,100%{box-shadow:0 0 0 0 rgba(233,69,96,.4)}50%{box-shadow:0 0 0 12px rgba(233,69,96,0)}}
+@keyframes pulse-late{0%,100%{box-shadow:0 0 0 0 rgba(255,107,53,.4)}50%{box-shadow:0 0 0 10px rgba(255,107,53,0)}}
+@keyframes fadeIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}
+@keyframes countPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+.animate-fade{animation:fadeIn .4s ease}
+.animate-slide-up{animation:slideUp .3s ease}
+.pulse-live{animation:pulse-live 2s infinite}
+.pulse-late{animation:pulse-late 2s infinite}
+.count-pulse{animation:countPulse 1s ease infinite}
+.tap-scale{transition:transform .1s}
+.tap-scale:active{transform:scale(.96)}
+.hide-scroll::-webkit-scrollbar{display:none}
+.hide-scroll{-ms-overflow-style:none;scrollbar-width:none}
+.glass{background:rgba(255,255,255,.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.timeline-line{position:absolute;left:28px;top:0;bottom:0;width:3px;background:linear-gradient(to bottom,#e94560,#0f3460)}
+@media print{.no-print{display:none!important}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useEffect,useRef,useCallback,useMemo}=React;
+
+const ROLES={ADMIN:'admin',EQUIPE:'equipe',CLIENTE:'cliente'};
+
+const API_CONFIG={
+  SCRIPT_URL:'https://script.google.com/macros/s/AKfycbxJQ_kdrh_1rrbrY8YDoWQDinv8grkObLCR4HbBO9ZSWiMyAW_kt78ke8MPdLunGc3XiQ/exec',
+  CLIENT_ID:'719102227600-frl30dkas9fpar88fcvknq3alqek4h3i.apps.googleusercontent.com',
+  WEATHER_API_KEY:'fcdcb6ab602a1b03aaf9e9fe37a3e43e',
+  POLLING_INTERVAL:10000,
+  ADMIN_EMAILS:['douglas@conteudourbano.com.br','vini@conteudourbano.com.br','fausto@conteudourbano.com.br'],
+};
+
+// ═══════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════
+const genId=()=>Math.random().toString(36).slice(2,10);
+const initials=(name)=>{const p=name.split(' ');return p.length>=2?(p[0][0]+p[p.length-1][0]).toUpperCase():name.slice(0,2).toUpperCase();};
+const timeToMin=(t)=>{if(!t)return 0;const[h,m]=(t+'').split(':').map(Number);return(h||0)*60+(m||0);};
+const minToTime=(m)=>{const h=Math.floor(m/60);const mm=m%60;return String(h).padStart(2,'0')+':'+String(mm).padStart(2,'0');};
+const calcTermino=(inicio,duracao)=>minToTime(timeToMin(inicio)+timeToMin(duracao));
+const recalcTimes=(blocks,fromIndex)=>{const r=[...blocks];for(let i=fromIndex;i<r.length;i++){const it={...r[i]};if(i>0&&i===fromIndex){it.termino=calcTermino(it.inicio,it.duracao);}else if(i>0){const prev=r[i-1];it.inicio=prev.termino;it.termino=calcTermino(it.inicio,it.duracao);}else{it.termino=calcTermino(it.inicio,it.duracao);}r[i]=it;}return r;};
+const autoDetectLate=(blocks)=>{const now=new Date();const cur=now.getHours()*60+now.getMinutes();return blocks.map(it=>{if(it.status==='pendente'&&timeToMin(it.inicio)<cur)return{...it,status:'atrasado'};return it;});};
+const weatherIcon=(code)=>{const map={'01':'☀️','02':'⛅','03':'☁️','04':'☁️','09':'🌧️','10':'🌦️','11':'⛈️','13':'❄️','50':'🌫️'};return map[(code||'01').slice(0,2)]||'☀️';};
+const isLate=(hora,esperado)=>{if(!hora||!esperado)return false;return timeToMin(hora)>timeToMin(esperado);};
+const statusIcon=(s)=>{const m={pendente:'⏳',em_andamento:'▶️',concluido:'✅',atrasado:'🔴'};return m[s]||'⏳';};
+const tipoColor=(tipo)=>{if(!tipo)return'bg-gray-100 text-gray-600';const t=tipo.toUpperCase();if(t.includes('GRAVAÇÃO'))return'bg-accent/20 text-accent';if(t.includes('DESLOC'))return'bg-blue-100 text-blue-700';return'bg-gray-100 text-gray-600';};
+const exportPDF=(elementId,filename)=>{const el=document.getElementById(elementId);if(!el){alert('Área não encontrada para exportar');return;}html2canvas(el,{scale:2,useCORS:true,backgroundColor:'#ffffff'}).then(canvas=>{const{jsPDF}=window.jspdf;const pdf=new jsPDF('p','mm','a4');const w=pdf.internal.pageSize.getWidth();const h=(canvas.height*w)/canvas.width;pdf.addImage(canvas.toDataURL('image/png'),'PNG',0,0,w,h);pdf.save(filename||'ordem-do-dia.pdf');}).catch(err=>alert('Erro ao gerar PDF: '+err.message));};
+
+// ═══════════════════════════════════════════
+// MOCK DATA (Stelara Fase 2 Salvador)
+// ═══════════════════════════════════════════
+const MOCK={
+  projeto:{nome:'Stelara Fase 2',cliente:'Janssen / Johnson & Johnson',campanha:'Stelara Fase 2 - Salvador',locacoes_texto:'Hotel Catharina Paraguaçu / Clínica Cliagem',logo_cliente:null},
+  equipe:[
+    {id:'e1',nome:'Vini Ribeiro',funcao:'Direção',email:'vini@conteudourbano.com.br',telefone:''},
+    {id:'e2',nome:'Fausto Fernandes',funcao:'AD',email:'fausto@conteudourbano.com.br',telefone:''},
+    {id:'e3',nome:'Alessandra Araújo',funcao:'Produção',email:'ale@conteudourbano.com.br',telefone:''},
+    {id:'e4',nome:'Bruno Marçal',funcao:'Fotógrafo Still',email:'bruno@conteudourbano.com.br',telefone:''},
+    {id:'e5',nome:'Rodrigo Fordiani',funcao:'Dir. Foto',email:'diguin@conteudourbano.com.br',telefone:''},
+    {id:'e6',nome:'Pedro Davila',funcao:'Op. Câmera',email:'ph@conteudourbano.com.br',telefone:''},
+    {id:'e7',nome:'Manu Mattos',funcao:'Op. Áudio',email:'manu@conteudourbano.com.br',telefone:''},
+    {id:'e8',nome:'Jade Alves',funcao:'Make',email:'jade@conteudourbano.com.br',telefone:''},
+  ],
+  locacoes:[
+    {id:'l1',nome:'Hotel Catharina Paraguaçu',endereco:'R. João Gomes, 128 - Rio Vermelho, Salvador - BA',tipo:'locacao',observacao:'Locação 1'},
+    {id:'l2',nome:'Clínica Cliagem',endereco:'Av. Luiz Viana Filho, 13223, Hangar Business Park, Torre 7',tipo:'locacao',observacao:'Locação 2'},
+    {id:'l3',nome:'Hospital Português da Bahia',endereco:'Av. Princesa Isabel, 914 - Graça, Salvador - BA',tipo:'hospital',observacao:'Emergência Loc. 1'},
+    {id:'l4',nome:'Hospital Aeroporto',endereco:'Av. Santos Dumont, 2028, Lauro de Freitas - BA',tipo:'hospital',observacao:'Emergência Loc. 2'},
+  ],
+  dias:[
+    {data:'dia1',label:'05/Mar',semana:'Quinta',tipo:'DESLOCAMENTO'},
+    {data:'dia2',label:'06/Mar',semana:'Sexta',tipo:'GRAVAÇÃO 1/2'},
+    {data:'dia3',label:'07/Mar',semana:'Sábado',tipo:'GRAVAÇÃO 2/2'},
+    {data:'dia4',label:'08/Mar',semana:'Domingo',tipo:'DESLOCAMENTO'},
+  ],
+  clima:[
+    {data:'dia1',min:24,max:31,chuva:0,desc:'Parcialmente nublado',icon:'02d',cidade:'Salvador'},
+    {data:'dia2',min:23,max:29,chuva:0,desc:'Ensolarado',icon:'01d',cidade:'Salvador'},
+    {data:'dia3',min:24,max:30,chuva:10,desc:'Nublado',icon:'03d',cidade:'Salvador'},
+    {data:'dia4',min:22,max:28,chuva:40,desc:'Chuva leve',icon:'10d',cidade:'Salvador'},
+  ],
+  cronograma:{
+    'dia1':[
+      {id:'c1',inicio:'13:00',nome:'SAÍDA CONTEÚDO URBANO',duracao:'00:30',obs:'',termino:'13:30',status:'concluido',imagens:[]},
+      {id:'c2',inicio:'13:30',nome:'CHEGADA AEROPORTO CONGONHAS',duracao:'01:10',obs:'Todos da equipe SP',termino:'14:40',status:'concluido',imagens:[]},
+      {id:'c3',inicio:'14:40',nome:'DESLOCAMENTO SP > SALVADOR',duracao:'01:10',obs:'',termino:'15:50',status:'concluido',imagens:[]},
+    ],
+    'dia2':[
+      {id:'c4',inicio:'09:00',nome:'MONTAGEM + CHEGADA MAKE E ÁUDIO',duracao:'01:30',obs:'Talento também chega',termino:'10:30',status:'pendente',imagens:[]},
+      {id:'c5',inicio:'09:30',nome:'MAKE TALENTO',duracao:'01:00',obs:'',termino:'10:30',status:'pendente',imagens:[]},
+      {id:'c6',inicio:'10:30',nome:'GRAVAÇÃO + SESSÃO DE FOTOS',duracao:'03:00',obs:'Paciente Cristina Peleteiro',termino:'13:30',status:'pendente',imagens:[]},
+      {id:'c7',inicio:'13:30',nome:'DESPRODUÇÃO',duracao:'01:00',obs:'',termino:'14:30',status:'pendente',imagens:[]},
+      {id:'c8',inicio:'14:30',nome:'ALMOÇO',duracao:'01:00',obs:'',termino:'15:30',status:'pendente',imagens:[]},
+      {id:'c9',inicio:'17:00',nome:'GRAVAÇÃO STABLISHING SHOTS',duracao:'02:00',obs:'Sem elenco',termino:'19:00',status:'pendente',imagens:[]},
+    ],
+    'dia3':[
+      {id:'c10',inicio:'08:00',nome:'CHEGADA NA LOCAÇÃO + MONTAGEM',duracao:'02:30',obs:'Equipe geral',termino:'10:30',status:'pendente',imagens:[]},
+      {id:'c11',inicio:'09:30',nome:'MAKE TALENTO',duracao:'01:00',obs:'',termino:'10:30',status:'pendente',imagens:[]},
+      {id:'c12',inicio:'10:30',nome:'GRAVAÇÃO + SESSÃO DE FOTOS',duracao:'02:00',obs:'',termino:'12:30',status:'pendente',imagens:[]},
+      {id:'c13',inicio:'12:00',nome:'DESPRODUÇÃO + ALMOÇO',duracao:'01:30',obs:'',termino:'13:30',status:'pendente',imagens:[]},
+    ],
+    'dia4':[
+      {id:'c14',inicio:'10:00',nome:'CHEGADA NO AEROPORTO',duracao:'01:15',obs:'Fausto + Bruno',termino:'11:15',status:'pendente',imagens:[]},
+      {id:'c15',inicio:'12:00',nome:'DESLOCAMENTO SALVADOR > SP',duracao:'01:15',obs:'Vini + Ale + Diguin + PH',termino:'13:15',status:'pendente',imagens:[]},
+    ],
+  },
+  checkins:[
+    {id:'ck1',nome:'Vini Ribeiro',email:'vini@conteudourbano.com.br',horario:'08:45',horario_esperado:'09:00',status:'no_horario'},
+    {id:'ck2',nome:'Fausto Fernandes',email:'fausto@conteudourbano.com.br',horario:'09:10',horario_esperado:'09:00',status:'atrasado'},
+    {id:'ck3',nome:'Rodrigo Fordiani',email:'diguin@conteudourbano.com.br',horario:'08:50',horario_esperado:'09:00',status:'no_horario'},
+  ],
+  historico:[
+    {id:'h1',nome:'OD Stelara Fase 1 - São Paulo',data:'15/Jan/2026',status:'concluida'},
+    {id:'h2',nome:'OD Stelara Fase 2 - Salvador',data:'05/Mar/2026',status:'em_andamento'},
+    {id:'h3',nome:'OD Campanha Roche - Rio',data:'20/Nov/2025',status:'concluida'},
+  ],
+};
+
+const LOGO_WHITE='';
+
+const LOGO_BLACK='';
+// COMPONENTS
+// ═══════════════════════════════════════════
+
+function Avatar({name,size='w-9 h-9',textSize='text-xs'}){
+  const colors=['bg-accent','bg-deep','bg-navy','bg-emerald-600','bg-violet-600','bg-amber-600','bg-rose-600','bg-teal-600'];
+  const ci=name.split('').reduce((a,c)=>a+c.charCodeAt(0),0)%colors.length;
+  return(<div className={`${size} ${colors[ci]} rounded-full flex items-center justify-center text-white font-semibold ${textSize} shrink-0`}>{initials(name)}</div>);
+}
+
+// -- Login Screen --
+function LoginScreen({onLogin}){
+  const[err,setErr]=useState('');
+  const[email,setEmail]=useState('');
+  const[mode,setMode]=useState('select'); // select, google, client
+  const handleDemo=()=>onLogin({name:'Douglas (Admin Demo)',email:'douglas@conteudourbano.com.br',picture:null,demo:true,role:ROLES.ADMIN});
+  const handleClientAccess=()=>{
+    if(!email.trim()){setErr('Digite seu email');return;}
+    onLogin({name:email.split('@')[0],email:email.trim(),picture:null,demo:true,role:ROLES.CLIENTE});
+  };
+  return(
+    <div className="min-h-screen bg-gradient-to-br from-dark via-navy to-deep flex items-center justify-center p-6">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm animate-fade text-center">
+        <div className="flex justify-center mb-4">
+          {LOGO_BLACK?<img src={LOGO_BLACK} alt="Conteúdo Urbano" className="h-14 object-contain"/>:<div className="text-2xl font-black text-dark tracking-tight">CONTEÚDO URBANO</div>}
+        </div>
+        <h1 className="text-xl font-bold text-dark mb-1">Ordem do Dia</h1>
+        <p className="text-gray-400 text-sm mb-6">Sistema de Gestão de Set</p>
+        {err&&<div className="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-4">{err}</div>}
+        {mode==='select'&&(
+          <div className="space-y-3">
+            <button onClick={handleDemo} className="w-full bg-dark hover:bg-navy text-white rounded-xl py-3 px-4 font-semibold tap-scale transition-all">
+              Entrar como Admin (Demo)
+            </button>
+            <button onClick={()=>setMode('client')} className="w-full bg-white border-2 border-gray-200 hover:border-accent rounded-xl py-3 px-4 font-medium text-gray-700 tap-scale transition-all">
+              Acesso Cliente
+            </button>
+          </div>
+        )}
+        {mode==='client'&&(
+          <div className="space-y-3">
+            <input type="email" placeholder="Seu email" value={email} onChange={e=>setEmail(e.target.value)}
+              className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-accent focus:outline-none"/>
+            <button onClick={handleClientAccess} className="w-full bg-accent hover:bg-accentHover text-white rounded-xl py-3 px-4 font-semibold tap-scale transition-all">Acessar</button>
+            <button onClick={()=>setMode('select')} className="text-sm text-gray-400 hover:text-gray-600">← Voltar</button>
+          </div>
+        )}
+        <p className="text-xs text-gray-400 mt-6">Equipe: @conteudourbano.com.br · Clientes: qualquer email</p>
+      </div>
+    </div>
+  );
+}
+
+// -- Welcome Popup with OD Summary --
+function WelcomePopup({data,onClose}){
+  if(!data)return null;
+  return(
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto animate-fade" onClick={e=>e.stopPropagation()} id="od-summary">
+        <div className="bg-gradient-to-r from-dark via-navy to-deep text-white p-6 rounded-t-2xl">
+          <div className="flex items-center justify-between mb-3">
+            {LOGO_WHITE?<img src={LOGO_WHITE} alt="CU" className="h-8 object-contain"/>:<span className="text-sm font-black text-white tracking-tight">CONTEÚDO URBANO</span>}
+            {data.projeto.cliente_logo&&<img src={data.projeto.cliente_logo} alt="Cliente" className="h-8 object-contain"/>}
+          </div>
+          <h2 className="text-lg font-bold">ORDEM DO DIA</h2>
+          <p className="text-white/80 text-sm">{data.projeto.nome}</p>
+          <p className="text-white/60 text-xs mt-1">Cliente: {data.projeto.cliente}</p>
+        </div>
+        <div className="p-6">
+          <h3 className="font-bold text-sm text-gray-500 uppercase mb-3">📍 Locações</h3>
+          <div className="space-y-2 mb-5">
+            {data.locacoes.map(l=>(
+              <a key={l.id} href={`https://maps.google.com/?q=${encodeURIComponent(l.endereco)}`} target="_blank" rel="noopener"
+                className={`block p-3 rounded-xl transition-all ${l.tipo==='hospital'?'bg-red-50 hover:bg-red-100 border border-red-200':'bg-blue-50 hover:bg-blue-100 border border-blue-200'}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-lg">{l.tipo==='hospital'?'🏥':'📍'}</span>
+                  <span className="text-sm font-bold">{l.nome}</span>
+                  <span className="text-xs text-gray-400 ml-auto">{l.observacao}</span>
+                </div>
+                <p className="text-xs text-gray-600 pl-7">{l.endereco}</p>
+              </a>
+            ))}
+          </div>
+          <h3 className="font-bold text-sm text-gray-500 uppercase mb-3">👥 Equipe ({data.equipe.length})</h3>
+          <div className="grid grid-cols-2 gap-2 mb-5">
+            {data.equipe.map(m=>(
+              <div key={m.id} className="flex items-center gap-2 p-2 bg-gray-50 rounded-lg">
+                <Avatar name={m.nome} size="w-7 h-7" textSize="text-[10px]"/>
+                <div className="min-w-0"><div className="text-xs font-medium truncate">{m.nome}</div><div className="text-[10px] text-gray-400">{m.funcao}</div></div>
+              </div>
+            ))}
+          </div>
+          <h3 className="font-bold text-sm text-gray-500 uppercase mb-3">📅 Cronograma Resumido</h3>
+          <div className="space-y-2 mb-5">
+            {data.dias.map(d=>(
+              <div key={d.data} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg">
+                <span className={`text-xs px-2 py-1 rounded-full font-semibold ${tipoColor(d.tipo)}`}>{d.label}</span>
+                <div><div className="text-xs font-medium">{d.semana} - {d.tipo}</div>{d.locacao&&<div className="text-[10px] text-gray-400">{d.locacao}</div>}</div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="w-full bg-accent hover:bg-accentHover text-white rounded-xl py-3 px-4 font-semibold tap-scale transition-all text-sm">
+              Entrar no App
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Day Tab --
+function DayTab({dia,active,onClick}){
+  return(
+    <button onClick={onClick}
+      className={`shrink-0 rounded-xl px-4 py-2.5 tap-scale transition-all ${active?'bg-dark text-white shadow-lg scale-105':'bg-white text-gray-600 hover:bg-gray-50 shadow'}`}>
+      <div className="text-sm font-bold">{dia.label}</div>
+      <div className="text-xs opacity-70">{dia.semana}</div>
+      <div className={`text-xs mt-1 px-2 py-0.5 rounded-full font-medium inline-block ${(dia.tipo||'').includes('GRAVAÇÃO')?'bg-accent/20 text-accent':'bg-blue-100 text-blue-700'}`}>{dia.tipo}</div>
+    </button>
+  );
+}
+
+// -- Timeline Block --
+function TimelineBlock({item,isLive,isAdmin,onEdit}){
+  const isAtrasado=item.status==='atrasado';
+  return(
+    <div className={`relative pl-14 pr-4 py-3 mb-3 animate-fade ${isAdmin?'tap-scale cursor-pointer':''}`} onClick={()=>isAdmin&&onEdit(item)}>
+      <div className={`absolute left-5 top-5 w-7 h-7 rounded-full flex items-center justify-center text-sm z-10 shadow
+        ${item.status==='concluido'?'bg-emerald-500 text-white':isLive?'bg-accent text-white count-pulse':isAtrasado?'bg-late text-white count-pulse':'bg-gray-200 text-gray-500'}`}>
+        {item.status==='concluido'?'✓':isLive?'▶':isAtrasado?'!':'○'}
+      </div>
+      <div className={`rounded-xl p-4 transition-all shadow-sm
+        ${isLive?'bg-white border-2 border-accent pulse-live shadow-lg':isAtrasado?'bg-lateLight border-2 border-late pulse-late shadow-lg':'bg-white border border-gray-100 hover:shadow-md'}`}>
+        {isLive&&<span className="inline-block bg-accent text-white text-xs font-bold px-2 py-0.5 rounded-full mb-2 animate-pulse">AO VIVO</span>}
+        {isAtrasado&&<span className="inline-block bg-late text-white text-xs font-bold px-2 py-0.5 rounded-full mb-2">ATRASADO</span>}
+        {item.adicionado_depois&&<span className="inline-block bg-violet-500 text-white text-xs font-bold px-2 py-0.5 rounded-full mb-2 ml-1">NOVO</span>}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-lg font-bold text-dark">{item.inicio}</span>
+              {item.termino&&<span className="text-gray-400 text-sm">→ {item.termino}</span>}
+            </div>
+            <h3 className="font-semibold text-dark text-sm leading-snug">{item.nome}</h3>
+            {item.obs&&<p className="text-xs text-gray-500 mt-1">{item.obs}</p>}
+            {item.imagens&&item.imagens.length>0&&(
+              <div className="flex gap-1 mt-2 flex-wrap">{item.imagens.map((img,i)=>(<img key={i} src={img} className="w-12 h-12 rounded-lg object-cover border"/>))}</div>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <span className="text-xs font-medium text-gray-400">{item.duracao}</span>
+            <div className="mt-2 flex items-center gap-1"><span className="text-xs">{statusIcon(item.status)}</span></div>
+          </div>
+        </div>
+        <div className="mt-3 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full transition-all ${item.status==='concluido'?'bg-emerald-400':isLive?'bg-accent':isAtrasado?'bg-late':'bg-gray-200'}`}
+            style={{width:`${item.status==='concluido'?100:isLive?55:isAtrasado?100:0}%`}}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Live Timer --
+function LiveTimer({item}){
+  const[now,setNow]=useState(new Date());
+  useEffect(()=>{const t=setInterval(()=>setNow(new Date()),1000);return()=>clearInterval(t);},[]);
+  if(!item)return null;
+  const startMin=timeToMin(item.inicio);const durMin=timeToMin(item.duracao);const endMin=startMin+durMin;
+  const currentMin=now.getHours()*60+now.getMinutes();
+  const elapsed=Math.max(0,currentMin-startMin);const remaining=Math.max(0,endMin-currentMin);
+  const progress=durMin>0?Math.min(100,(elapsed/durMin)*100):0;
+  const remColor=remaining<=5?'text-red-500 count-pulse':remaining<=15?'text-amber-500':'text-emerald-500';
+  return(
+    <div className="fixed bottom-0 left-0 right-0 glass border-t border-gray-200 p-3 animate-slide-up z-50 no-print">
+      <div className="max-w-lg mx-auto">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2"><span className="w-2 h-2 bg-accent rounded-full animate-pulse"/><span className="text-xs font-semibold text-accent uppercase">Ao Vivo</span></div>
+          <span className={`text-sm font-bold ${remColor}`}>{minToTime(remaining)} restante</span>
+        </div>
+        <h4 className="font-bold text-dark text-sm truncate">{item.nome}</h4>
+        <div className="flex items-center gap-2 mt-1 text-xs text-gray-500">
+          <span>{item.inicio}</span>
+          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-accent rounded-full transition-all" style={{width:`${progress}%`}}/></div>
+          <span>{item.termino}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Edit Modal (Admin only) --
+function EditModal({item,onSave,onDelete,onClose,isAdmin}){
+  const[form,setForm]=useState({...item});
+  const fileRef=useRef(null);
+  const handleChange=(k,v)=>setForm(p=>{
+    const updated={...p,[k]:v};
+    if(k==='inicio'||k==='duracao'){updated.termino=calcTermino(updated.inicio,updated.duracao);}
+    return updated;
+  });
+  const handleImage=(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    const reader=new FileReader();
+    reader.onload=(ev)=>{setForm(p=>({...p,imagens:[...(p.imagens||[]),ev.target.result]}));};
+    reader.readAsDataURL(file);
+  };
+  if(!isAdmin)return null;
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">Editar Quadro</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <div className="space-y-3">
+          <div><label className="text-xs font-medium text-gray-500 block mb-1">Atividade</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.nome} onChange={e=>handleChange('nome',e.target.value)}/></div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs font-medium text-gray-500 block mb-1">Início</label>
+              <input type="time" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.inicio} onChange={e=>handleChange('inicio',e.target.value)}/></div>
+            <div><label className="text-xs font-medium text-gray-500 block mb-1">Duração</label>
+              <input type="time" className="w-full border rounded-lg px-3 py-2 text-sm" value={form.duracao} onChange={e=>handleChange('duracao',e.target.value)}/></div>
+            <div><label className="text-xs font-medium text-gray-500 block mb-1">Término</label>
+              <input type="time" className="w-full border rounded-lg px-3 py-2 text-sm bg-gray-50" value={form.termino} readOnly/></div>
+          </div>
+          <div><label className="text-xs font-medium text-gray-500 block mb-1">Observações</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.obs} onChange={e=>handleChange('obs',e.target.value)}/></div>
+          <div><label className="text-xs font-medium text-gray-500 block mb-1">Status</label>
+            <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.status} onChange={e=>handleChange('status',e.target.value)}>
+              <option value="pendente">⏳ Pendente</option><option value="em_andamento">🔴 Em andamento</option>
+              <option value="atrasado">🟠 Atrasado</option><option value="concluido">✅ Concluído</option>
+            </select></div>
+          <div><label className="text-xs font-medium text-gray-500 block mb-1">Imagens</label>
+            <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.tiff" className="hidden" onChange={handleImage}/>
+            <button onClick={()=>fileRef.current?.click()} className="text-sm text-accent font-medium hover:underline">+ Adicionar imagem</button>
+            {form.imagens&&form.imagens.length>0&&(
+              <div className="flex gap-2 mt-2 flex-wrap">{form.imagens.map((img,i)=>(
+                <div key={i} className="relative"><img src={img} className="w-16 h-16 rounded-lg object-cover border"/>
+                  <button onClick={()=>setForm(p=>({...p,imagens:p.imagens.filter((_,j)=>j!==i)}))} className="absolute -top-1 -right-1 bg-red-500 text-white w-4 h-4 rounded-full text-xs flex items-center justify-center">×</button>
+                </div>
+              ))}</div>
+            )}</div>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <button onClick={()=>onDelete(form.id)} className="bg-red-100 hover:bg-red-200 text-red-600 font-medium py-3 px-4 rounded-xl tap-scale transition-all text-sm">🗑️</button>
+          <button onClick={()=>onSave(form)} className="flex-1 bg-accent hover:bg-accentHover text-white font-semibold py-3 rounded-xl tap-scale transition-all">Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Check-in Panel --
+function CheckInPanel({checkins,equipe,onCheckIn,onClose,isAdmin}){
+  const checked=new Set(checkins.map(c=>c.email));
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">Check-in da Equipe</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <button onClick={onCheckIn} className="w-full bg-accent text-white font-semibold py-3 rounded-xl mb-4 tap-scale transition-all">📍 Fazer Meu Check-in</button>
+        <p className="text-xs text-gray-400 mb-3">{checkins.length}/{equipe.length} presentes</p>
+        <div className="space-y-2">
+          {equipe.map(m=>{
+            const ci=checkins.find(c=>c.email===m.email);
+            const late=ci&&ci.horario_esperado&&isLate(ci.horario,ci.horario_esperado);
+            return(
+              <div key={m.id} className={`flex items-center gap-3 p-3 rounded-xl ${ci?(late?'bg-red-50 border border-red-200':'bg-emerald-50'):'bg-gray-50'}`}>
+                <Avatar name={m.nome} size="w-8 h-8" textSize="text-xs"/>
+                <div className="flex-1 min-w-0"><div className="text-sm font-medium truncate">{m.nome}</div><div className="text-xs text-gray-400">{m.funcao}</div></div>
+                {ci?(<span className={`text-xs font-medium ${late?'text-red-600 font-bold':'text-emerald-600'}`}>{late?'⚠️ ':' ✓ '}{ci.horario}</span>):(<span className="text-xs text-gray-400">Ausente</span>)}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Notifications Panel --
+function NotifPanel({cronograma,checkins,isAdmin,onClose}){
+  const upcoming=cronograma.filter(c=>c.status==='pendente'||c.status==='atrasado').slice(0,5);
+  const lateCheckins=checkins.filter(c=>c.horario_esperado&&isLate(c.horario,c.horario_esperado));
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold">🔔 Notificações</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button></div>
+        {isAdmin&&lateCheckins.length>0&&(
+          <div className="mb-4"><h4 className="text-sm font-bold text-red-500 mb-2">⚠️ Check-ins Atrasados</h4>
+            {lateCheckins.map((c,i)=>(<div key={i} className="flex items-center gap-2 p-2 bg-red-50 rounded-lg mb-1">
+              <span className="text-xs font-bold text-red-600">{c.nome}</span><span className="text-xs text-gray-500">chegou {c.horario} (esperado: {c.horario_esperado})</span>
+            </div>))}</div>
+        )}
+        <h4 className="text-sm font-bold text-gray-500 mb-2">Próximas Atividades</h4>
+        {upcoming.length===0?(<p className="text-gray-400 text-sm text-center py-4">Nenhuma atividade pendente.</p>):(
+          <div className="space-y-2">{upcoming.map((item,i)=>(
+            <div key={i} className={`flex items-center gap-3 p-3 rounded-xl ${item.status==='atrasado'?'bg-orange-50':'bg-amber-50'}`}>
+              <span className="text-lg">{item.status==='atrasado'?'🟠':'⏰'}</span>
+              <div className="flex-1"><div className="text-sm font-medium">{item.nome}</div><div className="text-xs text-gray-500">Início: {item.inicio} · {item.duracao}</div></div>
+            </div>
+          ))}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -- Team & Locations Panel --
+function TeamPanel({equipe,locacoes,onClose}){
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[85vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold">👥 Equipe & Locações</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button></div>
+        <h4 className="text-sm font-bold text-gray-500 uppercase mb-2">Equipe</h4>
+        <div className="space-y-2 mb-6">{equipe.map(m=>(
+          <div key={m.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
+            <Avatar name={m.nome}/><div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">{m.nome}</div><div className="text-xs text-gray-400">{m.funcao}</div></div>
+            <a href={`tel:${m.telefone}`} className="text-accent text-sm">📞</a></div>
+        ))}</div>
+        <h4 className="text-sm font-bold text-gray-500 uppercase mb-2">Locações</h4>
+        <div className="space-y-2">{locacoes.map(l=>(
+          <a key={l.id} href={`https://maps.google.com/?q=${encodeURIComponent(l.endereco)}`} target="_blank" rel="noopener"
+            className="block p-3 bg-gray-50 rounded-xl hover:bg-gray-100 transition-all">
+            <div className="flex items-center gap-2 mb-1"><span>{l.tipo==='hospital'?'🏥':'📍'}</span><span className="text-sm font-semibold">{l.nome}</span></div>
+            <p className="text-xs text-gray-500">{l.endereco}</p><p className="text-xs text-gray-400 italic">{l.observacao}</p></a>
+        ))}</div>
+      </div>
+    </div>
+  );
+}
+
+// -- Report Modal --
+function ReportModal({cronograma,checkins,onClose}){
+  const allBlocks=Object.values(cronograma).flat();
+  const atrasados=allBlocks.filter(b=>b.status==='atrasado');
+  const novos=allBlocks.filter(b=>b.adicionado_depois);
+  const lateCheckins=checkins.filter(c=>c.horario_esperado&&isLate(c.horario,c.horario_esperado));
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto animate-slide-up" onClick={e=>e.stopPropagation()} id="report-content">
+        <div className="bg-gradient-to-r from-dark to-navy text-white p-6 rounded-t-2xl">
+          <h2 className="text-lg font-bold">📊 Relatório de Gestão</h2>
+          <p className="text-white/70 text-sm">Pós-produção</p>
+        </div>
+        <div className="p-6 space-y-5">
+          <div><h3 className="font-bold text-sm text-red-500 mb-2">⚠️ Check-ins Atrasados ({lateCheckins.length})</h3>
+            {lateCheckins.length===0?<p className="text-sm text-gray-400">Nenhum atraso de check-in.</p>:
+              lateCheckins.map((c,i)=>(<div key={i} className="flex justify-between p-2 bg-red-50 rounded-lg mb-1 text-sm">
+                <span className="font-medium">{c.nome}</span><span className="text-red-600">Chegou: {c.horario} (esperado: {c.horario_esperado})</span></div>))}</div>
+          <div><h3 className="font-bold text-sm text-orange-500 mb-2">🟠 Processos Atrasados ({atrasados.length})</h3>
+            {atrasados.length===0?<p className="text-sm text-gray-400">Nenhum processo atrasou.</p>:
+              atrasados.map((b,i)=>(<div key={i} className="p-2 bg-orange-50 rounded-lg mb-1 text-sm"><span className="font-medium">{b.nome}</span><span className="text-gray-500 ml-2">{b.inicio} - {b.termino}</span></div>))}</div>
+          <div><h3 className="font-bold text-sm text-violet-500 mb-2">🆕 Processos Adicionados ({novos.length})</h3>
+            {novos.length===0?<p className="text-sm text-gray-400">Nenhum processo novo.</p>:
+              novos.map((b,i)=>(<div key={i} className="p-2 bg-violet-50 rounded-lg mb-1 text-sm"><span className="font-medium">{b.nome}</span><span className="text-gray-500 ml-2">{b.inicio} - {b.termino}</span></div>))}</div>
+          <button onClick={()=>exportPDF('report-content','relatorio-gestao.pdf')} className="w-full bg-dark hover:bg-navy text-white font-semibold py-3 rounded-xl tap-scale transition-all">📄 Exportar PDF</button>
+          <button onClick={onClose} className="w-full bg-gray-100 hover:bg-gray-200 text-dark font-medium py-3 rounded-xl tap-scale transition-all">Fechar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- History Modal --
+function HistoryModal({historico,onClose,onSelect}){
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[80vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold">📋 Histórico de ODs</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button></div>
+        {historico.length===0?<p className="text-gray-400 text-sm text-center py-8">Nenhum histórico ainda.</p>:(
+          <div className="space-y-2">{historico.map(h=>(
+            <button key={h.id} onClick={()=>onSelect(h)} className="w-full text-left p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-all tap-scale">
+              <div className="font-semibold text-sm">{h.nome}</div>
+              <div className="text-xs text-gray-500">{h.cliente} · {h.data}</div>
+              <span className={`text-xs px-2 py-0.5 rounded-full mt-1 inline-block ${h.status==='finalizado'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{h.status}</span>
+            </button>
+          ))}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -- New OD Template Modal --
+function NewODModal({onClose,onCreate}){
+  const SEMANA=['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
+  const MESES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  const TIPOS=['DESLOCAMENTO','GRAVAÇÃO','PÓS-PRODUÇÃO','REUNIÃO','PREPARAÇÃO','OUTRO'];
+  const[step,setStep]=useState(1);
+  const[nome,setNome]=useState('');
+  const[cliente,setCliente]=useState('');
+  const[cidade,setCidade]=useState('');
+  const[inicio,setInicio]=useState('');
+  const[fim,setFim]=useState('');
+  const[locNome,setLocNome]=useState('');
+  const[locEnd,setLocEnd]=useState('');
+  const[locacoes,setLocacoes]=useState([]);
+  const[dias,setDias]=useState([]);
+  const[err,setErr]=useState('');
+
+  const generateDias=()=>{
+    if(!inicio||!fim)return[];
+    const d1=new Date(inicio+'T12:00:00');const d2=new Date(fim+'T12:00:00');
+    const result=[];let i=0;
+    for(let d=new Date(d1);d<=d2;d.setDate(d.getDate()+1)){
+      const dd=String(d.getDate()).padStart(2,'0');
+      const label=`${dd}/${MESES[d.getMonth()]}`;
+      const semana=SEMANA[d.getDay()];
+      result.push({data:`dia${i}`,label,semana,tipo:'GRAVAÇÃO',locacao:''});
+      i++;
+    }
+    return result;
+  };
+
+  const goStep2=()=>{
+    if(!nome||!cliente||!inicio||!fim){setErr('Preencha todos os campos');return;}
+    if(new Date(fim)<new Date(inicio)){setErr('Data fim deve ser após data início');return;}
+    const d=generateDias();
+    if(d.length>14){setErr('Máximo 14 dias por OD');return;}
+    setDias(d);setErr('');setStep(2);
+  };
+
+  const addLoc=()=>{
+    if(!locNome.trim())return;
+    setLocacoes(p=>[...p,{id:genId(),nome:locNome.trim(),endereco:locEnd.trim(),tipo:'locacao',observacao:`Locação ${p.length+1}`}]);
+    setLocNome('');setLocEnd('');
+  };
+
+  const removeLoc=(id)=>setLocacoes(p=>p.filter(l=>l.id!==id));
+
+  const updateDia=(idx,field,val)=>{
+    setDias(p=>{const n=[...p];n[idx]={...n[idx],[field]:val};return n;});
+  };
+
+  const handleCreate=()=>{
+    const crono={};
+    dias.forEach(d=>{crono[d.data]=[{id:genId(),inicio:'09:00',nome:'PRIMEIRA ATIVIDADE',duracao:'01:00',obs:'',termino:'10:00',status:'pendente',imagens:[]}];});
+    onCreate({
+      projeto:{nome,cliente,campanha:`${nome} - ${cidade}`,locacoes_texto:locacoes.map(l=>l.nome).join(' / '),logo_cliente:null},
+      equipe:[],
+      locacoes,
+      dias,
+      clima:dias.map(d=>({data:d.data,min:0,max:0,chuva:0,desc:'--',icon:'01d',cidade:cidade||''})),
+      cronograma:crono,
+      checkins:[],
+      historico:[],
+    });
+  };
+
+  const inp='w-full border-2 border-gray-200 focus:border-accent rounded-xl px-3 py-2.5 text-sm focus:outline-none transition-colors';
+
+  return(
+    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-auto p-6 animate-slide-up" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold">{step===1?'➕ Nova Ordem do Dia':'📋 Configurar Dias'}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        {err&&<div className="bg-red-50 text-red-600 text-sm rounded-lg p-3 mb-3">{err}</div>}
+
+        {step===1&&(
+          <div className="space-y-3">
+            <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nome do Projeto *</label>
+              <input className={inp} value={nome} onChange={e=>setNome(e.target.value)} placeholder="Ex: CAMPANHA VERÃO 2026"/></div>
+            <div><label className="text-xs font-semibold text-gray-500 block mb-1">Cliente *</label>
+              <input className={inp} value={cliente} onChange={e=>setCliente(e.target.value)} placeholder="Ex: Janssen / Johnson & Johnson"/></div>
+            <div><label className="text-xs font-semibold text-gray-500 block mb-1">Cidade</label>
+              <input className={inp} value={cidade} onChange={e=>setCidade(e.target.value)} placeholder="Ex: São Paulo"/></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs font-semibold text-gray-500 block mb-1">Data Início *</label>
+                <input type="date" className={inp} value={inicio} onChange={e=>setInicio(e.target.value)}/></div>
+              <div><label className="text-xs font-semibold text-gray-500 block mb-1">Data Fim *</label>
+                <input type="date" className={inp} value={fim} onChange={e=>setFim(e.target.value)}/></div>
+            </div>
+            <div className="pt-2">
+              <label className="text-xs font-semibold text-gray-500 block mb-2">Locações (opcional)</label>
+              <div className="flex gap-2 mb-2">
+                <input className={`${inp} flex-1`} value={locNome} onChange={e=>setLocNome(e.target.value)} placeholder="Nome da locação"/>
+                <button onClick={addLoc} className="bg-dark text-white px-3 rounded-xl text-lg font-bold shrink-0">+</button>
+              </div>
+              {locNome&&<input className={`${inp} mb-2`} value={locEnd} onChange={e=>setLocEnd(e.target.value)} placeholder="Endereço (opcional)"/>}
+              {locacoes.length>0&&(
+                <div className="space-y-1">
+                  {locacoes.map(l=>(
+                    <div key={l.id} className="flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2 text-sm">
+                      <span className="flex-1">📍 {l.nome}</span>
+                      <button onClick={()=>removeLoc(l.id)} className="text-red-400 hover:text-red-600 font-bold">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={goStep2} className="w-full mt-2 bg-accent hover:bg-accentHover text-white font-semibold py-3 rounded-xl tap-scale transition-all">
+              Próximo: Configurar Dias →
+            </button>
+          </div>
+        )}
+
+        {step===2&&(
+          <div className="space-y-3">
+            <p className="text-xs text-gray-400 mb-1">{dias.length} dia(s) · Defina o tipo de cada dia</p>
+            {dias.map((d,i)=>(
+              <div key={d.data} className="bg-gray-50 rounded-xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-bold">{d.label} — {d.semana}</span>
+                </div>
+                <select value={d.tipo} onChange={e=>updateDia(i,'tipo',e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm bg-white mb-2">
+                  {TIPOS.map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+                {locacoes.length>0&&(
+                  <select value={d.locacao||''} onChange={e=>updateDia(i,'locacao',e.target.value)}
+                    className="w-full border rounded-lg px-3 py-2 text-sm bg-white">
+                    <option value="">Sem locação definida</option>
+                    {locacoes.map(l=><option key={l.id} value={l.nome}>{l.nome}</option>)}
+                  </select>
+                )}
+              </div>
+            ))}
+            <div className="flex gap-2 pt-2">
+              <button onClick={()=>setStep(1)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-dark font-medium py-3 rounded-xl tap-scale transition-all">← Voltar</button>
+              <button onClick={handleCreate} className="flex-1 bg-accent hover:bg-accentHover text-white font-semibold py-3 rounded-xl tap-scale transition-all">
+                Criar OD ✓
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════
+function App(){
+  const[user,setUser]=useState(null);
+  const[data,setData]=useState(null);
+  const[cronograma,setCronograma]=useState({});
+  const[checkins,setCheckins]=useState([]);
+  const[selectedDay,setSelectedDay]=useState('dia2');
+  const[showEdit,setShowEdit]=useState(null);
+  const[showCheckin,setShowCheckin]=useState(false);
+  const[showNotif,setShowNotif]=useState(false);
+  const[showTeam,setShowTeam]=useState(false);
+  const[showWelcome,setShowWelcome]=useState(false);
+  const[showReport,setShowReport]=useState(false);
+  const[showHistory,setShowHistory]=useState(false);
+  const[showNewOD,setShowNewOD]=useState(false);
+  const[saved,setSaved]=useState(false);
+  const[time,setTime]=useState(new Date());
+
+  const isAdmin=user?.role===ROLES.ADMIN;
+
+  useEffect(()=>{const t=setInterval(()=>setTime(new Date()),1000);return()=>clearInterval(t);},[]);
+
+  // Auto-detect late blocks every 30s
+  useEffect(()=>{
+    if(!user)return;
+    const check=()=>{
+      setCronograma(prev=>{
+        const updated={};
+        Object.entries(prev).forEach(([day,blocks])=>{updated[day]=autoDetectLate(blocks);});
+        return updated;
+      });
+    };
+    check();
+    const t=setInterval(check,30000);
+    return()=>clearInterval(t);
+  },[user]);
+
+  useEffect(()=>{
+    if(!user)return;
+    setData({projeto:MOCK.projeto,equipe:MOCK.equipe,locacoes:MOCK.locacoes,dias:MOCK.dias,clima:MOCK.clima});
+    setCronograma({...MOCK.cronograma});
+    setCheckins([...MOCK.checkins]);
+    setShowWelcome(true);
+  },[user]);
+
+  const todayCrono=cronograma[selectedDay]||[];
+  const liveItem=todayCrono.find(c=>c.status==='em_andamento');
+  const pendingCount=todayCrono.filter(c=>c.status==='pendente'||c.status==='atrasado').length;
+  const totalBlocks=todayCrono.length;
+  const doneBlocks=todayCrono.filter(c=>c.status==='concluido').length;
+  const dayProgress=totalBlocks>0?((doneBlocks+(liveItem?0.5:0))/totalBlocks)*100:0;
+
+  const handleSave=(updated)=>{
+    setCronograma(prev=>{
+      const newC={...prev};
+      const blocks=[...(newC[selectedDay]||[])];
+      const idx=blocks.findIndex(b=>b.id===updated.id);
+      if(idx>=0){blocks[idx]=updated;newC[selectedDay]=recalcTimes(blocks,idx);}
+      return newC;
+    });
+    setShowEdit(null);setSaved(true);setTimeout(()=>setSaved(false),2000);
+  };
+
+  const handleDelete=(id)=>{
+    setCronograma(prev=>{const newC={...prev};newC[selectedDay]=(newC[selectedDay]||[]).filter(b=>b.id!==id);return newC;});
+    setShowEdit(null);setSaved(true);setTimeout(()=>setSaved(false),2000);
+  };
+
+  const handleAddBlock=()=>{
+    const last=todayCrono[todayCrono.length-1];
+    const startTime=last?last.termino:'09:00';
+    const newBlock={id:genId(),inicio:startTime,nome:'NOVA ATIVIDADE',duracao:'01:00',obs:'',termino:calcTermino(startTime,'01:00'),status:'pendente',imagens:[],adicionado_depois:true};
+    setCronograma(prev=>({...prev,[selectedDay]:[...(prev[selectedDay]||[]),newBlock]}));
+  };
+
+  const handleCheckIn=()=>{
+    if(!user)return;
+    const already=checkins.find(c=>c.email===user.email);
+    if(already)return;
+    const nowStr=`${String(time.getHours()).padStart(2,'0')}:${String(time.getMinutes()).padStart(2,'0')}`;
+    const firstBlock=todayCrono[0];
+    const expected=firstBlock?firstBlock.inicio:'09:00';
+    setCheckins(prev=>[...prev,{nome:user.name,funcao:'Equipe',horario:nowStr,email:user.email,horario_esperado:expected}]);
+  };
+
+  const handleExportPDF=()=>exportPDF('timeline-area',`od-${selectedDay}.pdf`);
+
+  if(!user)return<LoginScreen onLogin={setUser}/>;
+  if(!data)return<div className="min-h-screen flex items-center justify-center"><div className="text-gray-400">Carregando...</div></div>;
+
+  const currentDia=data.dias.find(d=>d.data===selectedDay);
+  const currentClima=data.clima.find(c=>c.data===selectedDay);
+
+  return(
+    <div className="min-h-screen bg-gray-50 pb-24">
+      {showWelcome&&<WelcomePopup data={data} onClose={()=>setShowWelcome(false)}/>}
+      <header className="bg-gradient-to-r from-dark via-navy to-deep text-white sticky top-0 z-40 no-print">
+        <div className="max-w-lg mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            {LOGO_WHITE?<img src={LOGO_WHITE} alt="CU" className="h-7 object-contain"/>:<span className="text-sm font-black text-white tracking-tight">CONTEÚDO URBANO</span>}
+            <div className="flex items-center gap-1.5">
+              {isAdmin&&<span className="text-[10px] bg-accent/30 px-1.5 py-0.5 rounded-full font-medium">Admin</span>}
+              <button onClick={()=>setShowNotif(true)} className="relative p-2 tap-scale"><span className="text-lg">🔔</span>
+                {pendingCount>0&&<span className="absolute -top-0.5 -right-0.5 bg-accent text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{pendingCount}</span>}</button>
+              <button onClick={()=>setShowCheckin(true)} className="relative p-2 tap-scale"><span className="text-lg">📍</span>
+                <span className="absolute -top-0.5 -right-0.5 bg-emerald-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">{checkins.length}</span></button>
+              <button onClick={()=>setShowTeam(true)} className="tap-scale"><Avatar name={user.name} size="w-7 h-7" textSize="text-[10px]"/></button>
+            </div>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <div><h1 className="text-sm font-bold">{data.projeto.nome}</h1><p className="text-xs text-white/60">{data.projeto.cliente}</p></div>
+            {data.projeto.cliente_logo&&<img src={data.projeto.cliente_logo} alt="Cliente" className="h-6 object-contain opacity-80"/>}
+          </div>
+          {currentClima&&(
+            <div className="flex items-center gap-3 mt-2 bg-white/10 rounded-lg px-3 py-1.5 text-xs">
+              <span className="text-lg">{weatherIcon(currentClima.icon)}</span>
+              <span className="font-medium">{currentClima.min}°—{currentClima.max}°</span>
+              <span className="text-white/60">{currentClima.chuva}mm</span>
+              <span className="text-white/50 truncate flex-1">{currentClima.desc}</span>
+            </div>
+          )}
+        </div>
+        <div className="h-1 bg-white/10"><div className="h-full bg-accent transition-all duration-1000" style={{width:`${dayProgress}%`}}/></div>
+      </header>
+
+      <div className="sticky top-[140px] z-30 bg-gray-50 pt-3 pb-2 px-4 no-print">
+        <div className="max-w-lg mx-auto flex gap-2 overflow-x-auto hide-scroll">
+          {data.dias.map(dia=><DayTab key={dia.data} dia={dia} active={selectedDay===dia.data} onClick={()=>setSelectedDay(dia.data)}/>)}
+        </div>
+      </div>
+
+      <div className="max-w-lg mx-auto px-4 mt-2 mb-3 no-print">
+        <div className="flex items-center justify-between">
+          <div><h2 className="text-lg font-bold text-dark">{currentDia?.semana}, {currentDia?.label}</h2>
+            <div className="flex items-center gap-2 mt-1">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${tipoColor(currentDia?.tipo||'')}`}>{currentDia?.tipo}</span>
+              {currentDia?.locacao&&<span className="text-xs text-gray-500">{currentDia.locacao}</span>}</div></div>
+          <div className="text-right">
+            <div className="text-2xl font-bold text-dark tabular-nums">{String(time.getHours()).padStart(2,'0')}:{String(time.getMinutes()).padStart(2,'0')}</div>
+            <div className="text-xs text-gray-400">{doneBlocks}/{totalBlocks} concluídos</div></div>
+        </div>
+      </div>
+
+      <div className="max-w-lg mx-auto px-4 relative" id="timeline-area">
+        <div className="timeline-line"/>
+        {todayCrono.map(item=><TimelineBlock key={item.id} item={item} isLive={item.status==='em_andamento'} isAdmin={isAdmin} onEdit={setShowEdit}/>)}
+        {todayCrono.length===0&&(<div className="text-center py-12 text-gray-400"><span className="text-4xl block mb-3">📋</span>Nenhum quadro para este dia.</div>)}
+      </div>
+
+      {isAdmin&&(
+        <div className="max-w-lg mx-auto px-4 mt-4 no-print">
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={handleAddBlock} className="flex-1 bg-accent/10 hover:bg-accent/20 text-accent font-medium py-2.5 rounded-xl tap-scale transition-all text-sm">➕ Adicionar Quadro</button>
+            <button onClick={()=>setShowNewOD(true)} className="flex-1 bg-dark hover:bg-navy text-white font-medium py-2.5 rounded-xl tap-scale transition-all text-sm">➕ Nova OD</button>
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button onClick={()=>setShowHistory(true)} className="flex-1 bg-gray-100 hover:bg-gray-200 text-dark font-medium py-2.5 rounded-xl tap-scale transition-all text-sm">📋 Histórico</button>
+          </div>
+        </div>
+      )}
+
+      {liveItem&&<LiveTimer item={liveItem}/>}
+      {saved&&(<div className="fixed top-20 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg animate-fade z-50 no-print">✓ Salvo com sucesso</div>)}
+      {showEdit&&<EditModal item={showEdit} onSave={handleSave} onDelete={handleDelete} onClose={()=>setShowEdit(null)} isAdmin={isAdmin}/>}
+      {showCheckin&&<CheckInPanel checkins={checkins} equipe={data.equipe} onCheckIn={handleCheckIn} onClose={()=>setShowCheckin(false)} isAdmin={isAdmin}/>}
+      {showNotif&&<NotifPanel cronograma={todayCrono} checkins={checkins} isAdmin={isAdmin} onClose={()=>setShowNotif(false)}/>}
+      {showTeam&&<TeamPanel equipe={data.equipe} locacoes={data.locacoes} onClose={()=>setShowTeam(false)}/>}
+      {showReport&&<ReportModal cronograma={cronograma} checkins={checkins} onClose={()=>setShowReport(false)}/>}
+      {showHistory&&<HistoryModal historico={MOCK.historico} onClose={()=>setShowHistory(false)} onSelect={(h)=>{setShowHistory(false);}}/>}
+      {showNewOD&&<NewODModal onClose={()=>setShowNewOD(false)} onCreate={(newData)=>{
+        setData({projeto:newData.projeto,equipe:newData.equipe,locacoes:newData.locacoes,dias:newData.dias,clima:newData.clima});
+        setCronograma({...newData.cronograma});
+        setCheckins([]);
+        setSelectedDay(newData.dias[0]?.data||'dia0');
+        setShowNewOD(false);setShowWelcome(true);setSaved(true);setTimeout(()=>setSaved(false),2000);
+      }}/>}
+    </div>
+  );
+}
+
+class ErrorBoundary extends React.Component{
+  constructor(props){super(props);this.state={hasError:false,error:null};}
+  static getDerivedStateFromError(error){return{hasError:true,error};}
+  componentDidCatch(error,info){console.error('React Error:',error,info);}
+  render(){if(this.state.hasError)return(<div style={{padding:'40px',textAlign:'center',fontFamily:'Inter,sans-serif'}}><h1 style={{color:'#e94560',fontSize:'24px',marginBottom:'12px'}}>Erro no App</h1><pre style={{background:'#f0f0f0',padding:'16px',borderRadius:'8px',textAlign:'left',overflow:'auto',fontSize:'12px'}}>{this.state.error?.toString()}</pre><button onClick={()=>this.setState({hasError:false,error:null})} style={{marginTop:'16px',background:'#1a1a2e',color:'white',border:'none',padding:'12px 24px',borderRadius:'8px',cursor:'pointer',fontSize:'14px'}}>Tentar Novamente</button></div>);return this.props.children;}
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App/></ErrorBoundary>);
+</script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</body>
+</html>
